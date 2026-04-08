@@ -1,7 +1,7 @@
-import Anthropic from '@anthropic-ai/sdk';
+import Groq from 'groq-sdk';
 import { NextRequest } from 'next/server';
 
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 const SYSTEM_PROMPT = `You are APIForge — an expert API code generator. Given a plain English description, you research the best npm packages and generate a complete, production-ready Express.js API.
 
@@ -63,8 +63,8 @@ Rules for the Express API:
 export async function POST(req: NextRequest) {
   const { request } = await req.json();
 
-  if (!process.env.ANTHROPIC_API_KEY) {
-    return Response.json({ error: 'ANTHROPIC_API_KEY not set' }, { status: 500 });
+  if (!process.env.GROQ_API_KEY) {
+    return Response.json({ error: 'GROQ_API_KEY not set' }, { status: 500 });
   }
 
   if (!request?.trim()) {
@@ -76,19 +76,20 @@ export async function POST(req: NextRequest) {
   const readable = new ReadableStream({
     async start(controller) {
       try {
-        const stream = anthropic.messages.stream({
-          model: 'claude-sonnet-4-20250514',
+        const stream = await groq.chat.completions.create({
+          model: 'llama-3.3-70b-versatile',
           max_tokens: 8000,
-          system: SYSTEM_PROMPT,
-          messages: [{ role: 'user', content: request.trim() }],
+          stream: true,
+          messages: [
+            { role: 'system', content: SYSTEM_PROMPT },
+            { role: 'user', content: request.trim() },
+          ],
         });
 
-        for await (const event of stream) {
-          if (
-            event.type === 'content_block_delta' &&
-            event.delta.type === 'text_delta'
-          ) {
-            controller.enqueue(encoder.encode(event.delta.text));
+        for await (const chunk of stream) {
+          const text = chunk.choices[0]?.delta?.content;
+          if (text) {
+            controller.enqueue(encoder.encode(text));
           }
         }
       } catch (err: unknown) {
