@@ -395,9 +395,9 @@ export default function Home() {
               <CodeViewer result={result} />
             )}
 
-            {result.serverJs && <ApiTester serverJs={result.serverJs} />}
-
             {result.deploy && <DeployCard text={result.deploy} />}
+
+            <ApiTester />
           </div>
         )}
 
