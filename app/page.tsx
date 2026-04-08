@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useRef, useCallback } from 'react';
+import ApiTester from './components/ApiTester';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -393,6 +394,8 @@ export default function Home() {
             {(result.serverJs || result.packageJson || result.envExample) && (
               <CodeViewer result={result} />
             )}
+
+            {result.serverJs && <ApiTester serverJs={result.serverJs} />}
 
             {result.deploy && <DeployCard text={result.deploy} />}
           </div>
