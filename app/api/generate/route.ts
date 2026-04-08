@@ -7,6 +7,14 @@ const SYSTEM_PROMPT = `You are APIForge — an expert API code generator. Given 
 
 Respond with EXACTLY this structure (use these exact delimiters, nothing outside them):
 
+===NAME===
+Short, descriptive API name (3–6 words, e.g. "YouTube MP3 Converter", "QR Code Generator")
+===END_NAME===
+
+===CATEGORY===
+Exactly one of: AI, Media, Data, Messaging, Language, Utility
+===END_CATEGORY===
+
 ===APPROACH===
 2–3 sentences: what you're building, which npm packages you're using, and why they're the best choice.
 ===END_APPROACH===
