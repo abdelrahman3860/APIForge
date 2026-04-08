@@ -168,6 +168,17 @@ export async function POST(req: NextRequest) {
 
     if (error) throw error;
 
+    // ── 8. Register webhook on the Railway project ─────────────────────────
+    // Railway has no programmatic webhook-create API; the URL to paste into
+    // Railway dashboard → Project Settings → Webhooks is returned here so the
+    // caller can surface it to the user.
+    const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'https://your-app.up.railway.app';
+    const webhookUrl = `${appUrl}/api/webhooks/railway${
+      process.env.RAILWAY_WEBHOOK_SECRET
+        ? `?secret=${process.env.RAILWAY_WEBHOOK_SECRET}`
+        : ''
+    }`;
+
     return NextResponse.json({
       ok: true,
       id: data.id,
@@ -175,6 +186,7 @@ export async function POST(req: NextRequest) {
       repoUrl,
       projectId,
       serviceId,
+      webhookUrl,
     });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Deployment failed';

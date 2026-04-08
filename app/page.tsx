@@ -464,7 +464,9 @@ export default function Home() {
 
   // Deploy state
   const [deployPhase, setDeployPhase] = useState<DeployPhase>('idle');
-  const [deployedApi, setDeployedApi] = useState<{ id: string; railwayUrl: string; repoUrl: string } | null>(null);
+  const [deployedApi, setDeployedApi] = useState<{
+    id: string; railwayUrl: string; repoUrl: string; webhookUrl: string;
+  } | null>(null);
   const [deployError, setDeployError] = useState('');
 
   // Post-deploy test state
@@ -738,12 +740,44 @@ export default function Home() {
               <div className="rounded-xl border border-emerald-500/20 bg-emerald-950/10 p-5 space-y-4">
                 <div className="flex items-center gap-2">
                   <div className="w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.6)]" />
-                  <span className="text-sm font-medium text-emerald-300">Live!</span>
+                  <span className="text-sm font-medium text-emerald-300">Deploying</span>
                   <a href={deployedApi.railwayUrl} target="_blank" rel="noopener noreferrer"
                     className="text-xs text-emerald-400/70 hover:text-emerald-300 font-mono truncate transition-colors">
                     {deployedApi.railwayUrl}
                   </a>
                 </div>
+
+                {/* Webhook setup notice */}
+                <details className="group">
+                  <summary className="text-xs text-gray-500 cursor-pointer hover:text-gray-300 transition-colors select-none list-none flex items-center gap-1.5">
+                    <svg className="w-3 h-3 transition-transform group-open:rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+                    </svg>
+                    Auto-update status when deployment finishes
+                  </summary>
+                  <div className="mt-2 rounded-lg border border-[#1a1a2e] bg-[#0a0a14] p-3 space-y-2">
+                    <p className="text-xs text-gray-400">
+                      Paste this URL in{' '}
+                      <a href={`https://railway.app/project/${deployedApi.railwayUrl.includes('railway.app/project/') ? deployedApi.railwayUrl.split('/project/')[1] : ''}`}
+                        target="_blank" rel="noopener noreferrer"
+                        className="text-violet-400 hover:text-violet-300">
+                        Railway → Project Settings → Webhooks
+                      </a>
+                    </p>
+                    <div className="flex items-center gap-2">
+                      <code className="flex-1 text-xs font-mono text-gray-300 bg-black/30 rounded px-2 py-1.5 truncate">
+                        {deployedApi.webhookUrl}
+                      </code>
+                      <button
+                        onClick={() => navigator.clipboard.writeText(deployedApi.webhookUrl)}
+                        className="flex-shrink-0 px-2 py-1.5 text-xs bg-white/5 hover:bg-white/10
+                                   border border-white/5 rounded text-gray-400 hover:text-gray-200 transition-colors"
+                      >
+                        Copy
+                      </button>
+                    </div>
+                  </div>
+                </details>
 
                 {!testedOnce ? (
                   <div className="space-y-2">
