@@ -228,54 +228,81 @@ function DeployProgressSteps() {
 
 function KeyForm({ apiId }: { apiId?: string }) {
   const [email, setEmail] = useState('');
-  const [sent, setSent] = useState(false);
+  const [key, setKey] = useState('');
+  const [copied, setCopied] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!email.trim() || !apiId) return;
     setLoading(true);
+    setError('');
     try {
-      await fetch('/api/keys', {
+      const res = await fetch('/api/keys', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, apiId }),
       });
-      setSent(true);
-    } catch {
-      setSent(true); // show success anyway — keys endpoint is Phase 4
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error);
+      setKey(data.key);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to generate key');
     } finally {
       setLoading(false);
     }
   }
 
-  if (sent) {
+  function copyKey() {
+    navigator.clipboard.writeText(key);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }
+
+  if (key) {
     return (
-      <div className="rounded-lg border border-green-500/20 bg-green-950/20 px-4 py-3 text-sm text-green-300">
-        API key sent to <span className="font-mono">{email}</span>
+      <div className="rounded-lg border border-violet-500/20 bg-violet-950/20 p-4 space-y-2">
+        <p className="text-xs text-violet-300 font-medium">Your API key (10 free calls):</p>
+        <div className="flex items-center gap-2">
+          <code className="flex-1 text-xs font-mono text-white bg-black/30 rounded px-3 py-2 truncate">
+            {key}
+          </code>
+          <button
+            onClick={copyKey}
+            className="flex-shrink-0 px-3 py-2 bg-violet-600 hover:bg-violet-700 text-white text-xs
+                       rounded-lg transition-colors font-medium"
+          >
+            {copied ? 'Copied!' : 'Copy'}
+          </button>
+        </div>
+        <p className="text-xs text-gray-500">Send this as the <code className="font-mono">X-API-Key</code> header with each request.</p>
       </div>
     );
   }
 
   return (
-    <form onSubmit={submit} className="flex gap-2">
-      <input
-        type="email"
-        required
-        value={email}
-        onChange={(e) => setEmail(e.target.value)}
-        placeholder="your@email.com"
-        className="flex-1 bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white
-                   placeholder-gray-600 focus:outline-none focus:border-purple-500"
-      />
-      <button
-        type="submit"
-        disabled={loading || !email.trim()}
-        className="px-4 py-2 bg-purple-600 hover:bg-purple-700 disabled:opacity-40 text-white
-                   text-sm font-medium rounded-lg transition-colors"
-      >
-        {loading ? '…' : 'Get Key'}
-      </button>
+    <form onSubmit={submit} className="space-y-2">
+      <div className="flex gap-2">
+        <input
+          type="email"
+          required
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          placeholder="your@email.com"
+          className="flex-1 bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white
+                     placeholder-gray-600 focus:outline-none focus:border-purple-500"
+        />
+        <button
+          type="submit"
+          disabled={loading || !email.trim()}
+          className="px-4 py-2 bg-purple-600 hover:bg-purple-700 disabled:opacity-40 text-white
+                     text-sm font-medium rounded-lg transition-colors"
+        >
+          {loading ? '…' : 'Get Key'}
+        </button>
+      </div>
+      {error && <p className="text-xs text-red-400">{error}</p>}
     </form>
   );
 }
@@ -311,6 +338,7 @@ function MarketplaceCard({ api }: { api: MarketplaceApi }) {
       ) : (
         <div className="space-y-3 border-t border-[#1a1a2e] pt-3">
           <ApiTester
+            apiId={api.id}
             defaultUrl={api.railway_url ?? ''}
             onTest={() => setTested(true)}
           />
@@ -721,6 +749,7 @@ export default function Home() {
                   <div className="space-y-2">
                     <p className="text-xs text-gray-400">Test your live API (1 free call included):</p>
                     <ApiTester
+                      apiId={deployedApi.id}
                       defaultUrl={deployedApi.railwayUrl}
                       onTest={() => setTestedOnce(true)}
                     />
