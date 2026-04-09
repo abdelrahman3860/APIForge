@@ -1,10 +1,34 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { execSync } from 'child_process';
-import { mkdtempSync, writeFileSync, rmSync } from 'fs';
-import { join } from 'path';
-import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
 import { supabaseAdmin } from '@/lib/supabase';
+
+// ── GitHub REST API client ─────────────────────────────────────────────────
+
+async function github(path: string, options: RequestInit = {}) {
+  const res = await fetch(`https://api.github.com${path}`, {
+    ...options,
+    headers: {
+      Accept: 'application/vnd.github+json',
+      Authorization: `Bearer ${process.env.GITHUB_TOKEN}`,
+      'X-GitHub-Api-Version': '2022-11-28',
+      'Content-Type': 'application/json',
+      ...(options.headers ?? {}),
+    },
+  });
+  const json = await res.json();
+  if (!res.ok) throw new Error(json.message ?? `GitHub ${res.status}`);
+  return json;
+}
+
+async function uploadFile(owner: string, repo: string, path: string, content: string) {
+  await github(`/repos/${owner}/${repo}/contents/${path}`, {
+    method: 'PUT',
+    body: JSON.stringify({
+      message: 'Initial API deployment',
+      content: Buffer.from(content, 'utf-8').toString('base64'),
+    }),
+  });
+}
 
 // ── Railway GraphQL client ─────────────────────────────────────────────────
 
@@ -26,7 +50,6 @@ function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-// Ensure package.json always has a start script for Railway/nixpacks
 function withStartScript(raw: string): string {
   try {
     const pkg = JSON.parse(raw);
@@ -52,33 +75,41 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  if (!process.env.GITHUB_TOKEN) {
+    return NextResponse.json(
+      { ok: false, error: 'GITHUB_TOKEN not set' },
+      { status: 500 }
+    );
+  }
+
   const slug = `apiforge-${randomUUID().slice(0, 8)}`;
-  const tempDir = mkdtempSync(join(tmpdir(), 'apiforge-'));
+  const owner = 'abdelrahman3860';
 
   try {
-    // ── 1. Write generated files to temp directory ─────────────────────────
-    writeFileSync(join(tempDir, 'server.js'), serverJs);
-    writeFileSync(
-      join(tempDir, 'package.json'),
+    // ── 1. Create public GitHub repo via REST API (no git/gh CLI) ──────────
+    await github('/user/repos', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: slug,
+        private: false,
+        auto_init: false,
+        description: `APIForge: ${name}`,
+      }),
+    });
+
+    const repoUrl = `https://github.com/${owner}/${slug}`;
+
+    // ── 2. Upload files via GitHub Contents API ────────────────────────────
+    await uploadFile(owner, slug, 'server.js', serverJs);
+    await uploadFile(
+      owner,
+      slug,
+      'package.json',
       withStartScript(packageJson || '{"name":"api","version":"1.0.0","scripts":{}}')
     );
     if (envExample) {
-      writeFileSync(join(tempDir, '.env.example'), envExample);
+      await uploadFile(owner, slug, '.env.example', envExample);
     }
-
-    // ── 2. Push to a new public GitHub repo via gh CLI ─────────────────────
-    for (const cmd of [
-      'git init -b main',
-      'git config user.email "deploy@apiforge.app"',
-      'git config user.name "APIForge Bot"',
-      'git add .',
-      'git commit -m "Initial API deployment"',
-      `gh repo create abdelrahman3860/${slug} --public --source=. --push --remote=origin`,
-    ]) {
-      execSync(cmd, { cwd: tempDir, stdio: 'pipe' });
-    }
-
-    const repoUrl = `https://github.com/abdelrahman3860/${slug}`;
 
     // ── 3. Create Railway project ──────────────────────────────────────────
     const { projectCreate } = await gql<{
@@ -99,7 +130,7 @@ export async function POST(req: NextRequest) {
         serviceCreate(input: {
           projectId: "${projectId}"
           name: "api"
-          source: { repo: "abdelrahman3860/${slug}" }
+          source: { repo: "${owner}/${slug}" }
         }) {
           id
         }
@@ -108,7 +139,7 @@ export async function POST(req: NextRequest) {
 
     const serviceId = serviceCreate.id;
 
-    // ── 5. Explicitly trigger deploy (in case auto-deploy didn't fire) ─────
+    // ── 5. Explicitly trigger deploy ───────────────────────────────────────
     await gql(
       `mutation {
         serviceInstanceDeployV2(
@@ -116,9 +147,7 @@ export async function POST(req: NextRequest) {
           environmentId: "${environmentId}"
         )
       }`
-    ).catch(() => {
-      // Non-fatal: serviceCreate may have already triggered the deployment
-    });
+    ).catch(() => {});
 
     // ── 6. Poll for Railway-generated domain (up to ~30s) ──────────────────
     let railwayUrl = `https://railway.app/project/${projectId}`;
@@ -168,10 +197,6 @@ export async function POST(req: NextRequest) {
 
     if (error) throw error;
 
-    // ── 8. Register webhook on the Railway project ─────────────────────────
-    // Railway has no programmatic webhook-create API; the URL to paste into
-    // Railway dashboard → Project Settings → Webhooks is returned here so the
-    // caller can surface it to the user.
     const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'https://your-app.up.railway.app';
     const webhookUrl = `${appUrl}/api/webhooks/railway${
       process.env.RAILWAY_WEBHOOK_SECRET
@@ -192,7 +217,5 @@ export async function POST(req: NextRequest) {
     const message = err instanceof Error ? err.message : 'Deployment failed';
     console.error('[deploy]', message);
     return NextResponse.json({ ok: false, error: message }, { status: 500 });
-  } finally {
-    rmSync(tempDir, { recursive: true, force: true });
   }
 }
