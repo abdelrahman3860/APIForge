@@ -536,16 +536,15 @@ export default function Home() {
       if (!data.ok) throw new Error(data.error);
       setDeployedApi(data);
 
-      // Fix #3 — poll /health every 5s (up to 20 attempts = 100s) before marking live
+      // Poll /health every 5s up to 3 minutes (36 attempts) — proxied to avoid CORS
       setDeployPhase('building');
       setBuildSeconds(0);
       const startTime = Date.now();
       const timer = setInterval(() => setBuildSeconds(Math.floor((Date.now() - startTime) / 1000)), 1000);
       let isLive = false;
-      for (let i = 0; i < 20; i++) {
+      for (let i = 0; i < 36; i++) {
         await new Promise(r => setTimeout(r, 5000));
         try {
-          // Proxy through Next.js server to avoid CORS block while Railway is starting up
           const hRes = await fetch(`/api/healthcheck?url=${encodeURIComponent(data.railwayUrl)}`);
           const hData = await hRes.json();
           if (hData.ok) { isLive = true; break; }
@@ -820,8 +819,13 @@ export default function Home() {
                 {/* Divider */}
                 <div className="border-t border-emerald-500/10" />
 
-                {/* Test form */}
-                {!testedOnce ? (
+                {/* Test form — only show once API is confirmed live */}
+                {!isApiLive ? (
+                  <div className="flex items-center gap-2 text-xs text-amber-400/80">
+                    <div className="w-3 h-3 border border-amber-400/60 border-t-transparent rounded-full animate-spin flex-shrink-0" />
+                    API is still starting up on Railway — check back in a minute, then refresh the page.
+                  </div>
+                ) : !testedOnce ? (
                   <div className="space-y-2">
                     <p className="text-xs text-gray-400 font-medium">Test your API (1 free call included):</p>
                     <ApiTester apiId={deployedApi.id} defaultUrl={deployedApi.railwayUrl} onTest={() => setTestedOnce(true)} />
