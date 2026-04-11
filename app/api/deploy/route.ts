@@ -78,7 +78,7 @@ export async function POST(req: NextRequest) {
 
   if (!serverJs || !name) {
     return NextResponse.json(
-      { ok: false, error: 'serverJs and name are required' },
+      { ok: false, error: 'Generated code was incomplete — the AI response did not include all required sections. Try generating again.' },
       { status: 400 }
     );
   }

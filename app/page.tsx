@@ -545,8 +545,10 @@ export default function Home() {
       for (let i = 0; i < 20; i++) {
         await new Promise(r => setTimeout(r, 5000));
         try {
-          const hRes = await fetch(`${data.railwayUrl}/health`, { signal: AbortSignal.timeout(4000) });
-          if (hRes.ok) { isLive = true; break; }
+          // Proxy through Next.js server to avoid CORS block while Railway is starting up
+          const hRes = await fetch(`/api/healthcheck?url=${encodeURIComponent(data.railwayUrl)}`);
+          const hData = await hRes.json();
+          if (hData.ok) { isLive = true; break; }
         } catch { /* still building */ }
       }
       clearInterval(timer);
