@@ -16,7 +16,7 @@ type ParsedResult = {
 };
 
 type Tab = 'server.js' | 'package.json' | '.env.example';
-type DeployPhase = 'idle' | 'deploying' | 'live' | 'failed';
+type DeployPhase = 'idle' | 'deploying' | 'building' | 'live' | 'failed';
 
 type MarketplaceApi = {
   id: string;
@@ -64,7 +64,10 @@ function extract(text: string, open: string, close: string): string {
   const s = text.indexOf(open);
   const e = text.indexOf(close);
   if (s === -1 || e === -1) return '';
-  return text.slice(s + open.length, e).trim();
+  let content = text.slice(s + open.length, e).trim();
+  // Fix #4 — strip markdown code fences the LLM sometimes wraps blocks in
+  content = content.replace(/^```\w*\s*\n?/, '').replace(/\n?```\s*$/, '').trim();
+  return content;
 }
 
 function parseResult(raw: string): ParsedResult {
@@ -468,9 +471,11 @@ export default function Home() {
   // Deploy
   const [deployPhase, setDeployPhase] = useState<DeployPhase>('idle');
   const [deployedApi, setDeployedApi] = useState<{
-    id: string; railwayUrl: string; repoUrl: string; webhookUrl: string;
+    id: string; railwayUrl: string; repoUrl: string; webhookUrl: string; apiKey?: string;
   } | null>(null);
   const [deployError, setDeployError] = useState('');
+  const [buildSeconds, setBuildSeconds] = useState(0);
+  const [isApiLive, setIsApiLive] = useState(false);
 
   // Post-deploy test
   const [testedOnce, setTestedOnce]   = useState(false);
@@ -513,7 +518,7 @@ export default function Home() {
 
   const deploy = useCallback(async () => {
     if (!result) return;
-    setDeployPhase('deploying'); setDeployError('');
+    setDeployPhase('deploying'); setDeployError(''); setBuildSeconds(0);
     try {
       const res = await fetch('/api/deploy', {
         method: 'POST',
@@ -530,6 +535,22 @@ export default function Home() {
       const data = await res.json();
       if (!data.ok) throw new Error(data.error);
       setDeployedApi(data);
+
+      // Fix #3 — poll /health every 5s (up to 20 attempts = 100s) before marking live
+      setDeployPhase('building');
+      setBuildSeconds(0);
+      const startTime = Date.now();
+      const timer = setInterval(() => setBuildSeconds(Math.floor((Date.now() - startTime) / 1000)), 1000);
+      let isLive = false;
+      for (let i = 0; i < 20; i++) {
+        await new Promise(r => setTimeout(r, 5000));
+        try {
+          const hRes = await fetch(`${data.railwayUrl}/health`, { signal: AbortSignal.timeout(4000) });
+          if (hRes.ok) { isLive = true; break; }
+        } catch { /* still building */ }
+      }
+      clearInterval(timer);
+      setIsApiLive(isLive);
       setDeployPhase('live');
     } catch (err: unknown) {
       setDeployError(err instanceof Error ? err.message : 'Deployment failed');
@@ -541,7 +562,7 @@ export default function Home() {
     abortRef.current?.abort();
     setIsGenerating(false); setStreamedText(''); setResult(null); setError('');
     setShowCode(false); setDeployPhase('idle'); setDeployedApi(null);
-    setDeployError(''); setTestedOnce(false); setShowKeyForm(false);
+    setDeployError(''); setTestedOnce(false); setShowKeyForm(false); setBuildSeconds(0); setIsApiLive(false);
   };
 
   const name     = result ? resolvedName(result, input) : '';
@@ -715,6 +736,29 @@ export default function Home() {
               </div>
             )}
 
+            {/* ── Building phase — health polling ── */}
+            {deployPhase === 'building' && deployedApi && (
+              <div className="rounded-2xl border border-amber-500/20 bg-amber-950/10 p-6 space-y-4">
+                <div className="flex items-center justify-between gap-4">
+                  <div className="flex items-center gap-2">
+                    <div className="w-4 h-4 border-2 border-amber-400 border-t-transparent rounded-full animate-spin flex-shrink-0" />
+                    <p className="text-sm font-semibold text-white">
+                      Waiting for Railway to build… ({buildSeconds}s)
+                    </p>
+                  </div>
+                  <span className="text-xs text-gray-500">up to 100s</span>
+                </div>
+                <a href={deployedApi.railwayUrl} target="_blank" rel="noopener noreferrer"
+                  className="text-xs font-mono text-amber-500/60 hover:text-amber-400 transition-colors block truncate pl-6">
+                  {deployedApi.railwayUrl}
+                </a>
+                <div className="h-1 rounded-full bg-white/5 overflow-hidden">
+                  <div className="h-full bg-amber-500/40 rounded-full transition-all duration-1000"
+                    style={{ width: `${Math.min((buildSeconds / 100) * 100, 100)}%` }} />
+                </div>
+              </div>
+            )}
+
             {/* ── Deploy failed ── */}
             {deployPhase === 'failed' && (
               <div className="rounded-2xl border border-red-500/20 bg-red-950/20 p-5 space-y-1">
@@ -734,7 +778,9 @@ export default function Home() {
                 <div className="space-y-1.5">
                   <div className="flex items-center gap-2">
                     <div className="w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.6)]" />
-                    <span className="text-sm font-semibold text-emerald-300">Deploying to Railway</span>
+                    <span className="text-sm font-semibold text-emerald-300">
+                      {isApiLive ? 'Live 🟢' : 'Deployed — building…'}
+                    </span>
                   </div>
                   <a href={deployedApi.railwayUrl} target="_blank" rel="noopener noreferrer"
                     className="text-xs font-mono text-emerald-500/60 hover:text-emerald-400 transition-colors block truncate pl-4">

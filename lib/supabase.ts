@@ -24,6 +24,8 @@ export type ApiRecord = {
   env_example: string;
   railway_url: string | null;
   railway_project_id: string | null;
+  api_key: string | null;
+  github_repo_url: string | null;
   status: 'deploying' | 'live' | 'failed';
   free_calls_used: number;
   created_at: string;

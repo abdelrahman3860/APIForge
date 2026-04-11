@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { randomUUID } from 'crypto';
+import { randomUUID, randomBytes } from 'crypto';
 import { supabaseAdmin } from '@/lib/supabase';
 
 // ── GitHub REST API client ─────────────────────────────────────────────────
@@ -50,6 +50,14 @@ function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+function stripMarkdownFences(code: string): string {
+  // Remove leading ``` fences with any language tag (javascript, js, node, json, etc.)
+  return code
+    .replace(/^```\w*\s*\n?/, '')
+    .replace(/\n?```\s*$/, '')
+    .trim();
+}
+
 function withStartScript(raw: string): string {
   try {
     const pkg = JSON.parse(raw);
@@ -82,6 +90,16 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  if (!process.env.RAILWAY_PROJECT_ID) {
+    return NextResponse.json(
+      { ok: false, error: 'RAILWAY_PROJECT_ID not set' },
+      { status: 500 }
+    );
+  }
+
+  // Fix #1 — generate a random deployment-specific API key
+  const apiKey = randomBytes(24).toString('hex');
+
   const slug = `apiforge-${randomUUID().slice(0, 8)}`;
   const owner = 'abdelrahman3860';
 
@@ -92,44 +110,56 @@ export async function POST(req: NextRequest) {
       body: JSON.stringify({
         name: slug,
         private: false,
-        auto_init: false,
+        auto_init: true,   // creates initial commit so repo is immediately accessible
         description: `APIForge: ${name}`,
       }),
     });
 
     const repoUrl = `https://github.com/${owner}/${slug}`;
 
+    // Give GitHub a moment to fully propagate the new repo before uploading
+    await sleep(2000);
+
     // ── 2. Upload files via GitHub Contents API ────────────────────────────
-    await uploadFile(owner, slug, 'server.js', serverJs);
+    await uploadFile(owner, slug, 'server.js', stripMarkdownFences(serverJs));
     await uploadFile(
       owner,
       slug,
       'package.json',
-      withStartScript(packageJson || '{"name":"api","version":"1.0.0","scripts":{}}')
+      withStartScript(stripMarkdownFences(packageJson) || '{"name":"api","version":"1.0.0","scripts":{}}')
     );
     if (envExample) {
-      await uploadFile(owner, slug, '.env.example', envExample);
+      // Fix #8 — strip any real values from .env.example before committing to a public repo
+      const safeEnvExample = stripMarkdownFences(envExample)
+        .split('\n')
+        .map(line => {
+          // Replace any value that doesn't look like a placeholder
+          const match = line.match(/^([A-Z0-9_]+=)(.+)$/);
+          if (!match) return line;
+          const [, key, val] = match;
+          const isPlaceholder = /your[_\-]?/i.test(val) || val.startsWith('<') || val.startsWith('xxx');
+          return isPlaceholder ? line : `${key}your_${key.replace('=', '').toLowerCase()}_here`;
+        })
+        .join('\n');
+      await uploadFile(owner, slug, '.env.example', safeEnvExample);
     }
 
-    // ── 3. Create Railway project ──────────────────────────────────────────
-    const { projectCreate } = await gql<{
-      projectCreate: { id: string; baseEnvironment: { id: string } };
-    }>(`mutation {
-      projectCreate(input: { name: "${slug}" }) {
-        id
-        baseEnvironment { id }
-      }
-    }`);
+    // ── 3. Use shared Railway project (Fix #2 — no per-deploy projectCreate) ─
+    const projectId = process.env.RAILWAY_PROJECT_ID;
 
-    const projectId = projectCreate.id;
-    const environmentId = projectCreate.baseEnvironment.id;
+    const { project } = await gql<{
+      project: { environments: { edges: { node: { id: string } }[] } };
+    }>(`query { project(id: "${projectId}") { environments { edges { node { id } } } } }`);
+
+    const envId = project.environments.edges[0]?.node?.id ?? null;
+    if (!envId) throw new Error('Could not resolve Railway environment ID');
 
     // ── 4. Create service linked to the GitHub repo (triggers auto-deploy) ─
     const { serviceCreate } = await gql<{ serviceCreate: { id: string } }>(
       `mutation {
         serviceCreate(input: {
           projectId: "${projectId}"
-          name: "api"
+          name: "${slug}"
           source: { repo: "${owner}/${slug}" }
         }) {
           id
@@ -139,20 +169,54 @@ export async function POST(req: NextRequest) {
 
     const serviceId = serviceCreate.id;
 
+    // ── 4b. Inject API_KEY into the service environment (Fix #1) ──────────
+    await gql(
+      `mutation {
+        serviceVariableUpsert(input: {
+          serviceId: "${serviceId}"
+          environmentId: "${envId}"
+          name: "API_KEY"
+          value: "${apiKey}"
+        })
+      }`
+    ).catch(() => {});
+
+    // ── 4c. Create a public domain for the service ─────────────────────────
+    let assignedDomain: string | null = null;
+    try {
+      const { serviceDomainCreate } = await gql<{
+        serviceDomainCreate: { domain: string };
+      }>(
+        `mutation {
+          serviceDomainCreate(input: {
+            serviceId: "${serviceId}"
+            environmentId: "${envId}"
+          }) {
+            domain
+          }
+        }`
+      );
+      assignedDomain = serviceDomainCreate.domain ?? null;
+    } catch {
+      // Domain creation failed — will fall back to polling
+    }
+
     // ── 5. Explicitly trigger deploy ───────────────────────────────────────
     await gql(
       `mutation {
         serviceInstanceDeployV2(
           serviceId: "${serviceId}"
-          environmentId: "${environmentId}"
+          environmentId: "${envId}"
         )
       }`
     ).catch(() => {});
 
-    // ── 6. Poll for Railway-generated domain (up to ~30s) ──────────────────
-    let railwayUrl = `https://railway.app/project/${projectId}`;
+    // ── 6. Use assigned domain or poll for Railway-generated domain (up to ~30s) ──
+    let railwayUrl = assignedDomain
+      ? `https://${assignedDomain}`
+      : `https://railway.app/project/${projectId}`;
 
-    for (let attempt = 0; attempt < 6; attempt++) {
+    for (let attempt = 0; !assignedDomain && attempt < 6; attempt++) {
       await sleep(5000);
       try {
         const { serviceInstance } = await gql<{
@@ -161,7 +225,7 @@ export async function POST(req: NextRequest) {
           };
         }>(
           `query {
-            serviceInstance(serviceId: "${serviceId}", environmentId: "${environmentId}") {
+            serviceInstance(serviceId: "${serviceId}", environmentId: "${envId}") {
               domains {
                 serviceDomains { domain }
               }
@@ -178,22 +242,34 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // ── 7. Persist to Supabase ─────────────────────────────────────────────
-    const { data, error } = await supabaseAdmin
+    // ── 7. Persist to Supabase (Fix #7 — include api_key + github_repo_url) ─
+    const baseRecord = {
+      name,
+      description: description || name,
+      category: category || 'Utility',
+      server_js: serverJs,
+      package_json: packageJson || '',
+      env_example: envExample || '',
+      railway_url: railwayUrl,
+      railway_project_id: projectId,
+      status: 'deploying' as const,
+    };
+
+    // Try with new columns first; fall back if schema not yet migrated (PGRST204)
+    let { data, error } = await supabaseAdmin
       .from('apis')
-      .insert({
-        name,
-        description: description || name,
-        category: category || 'Utility',
-        server_js: serverJs,
-        package_json: packageJson || '',
-        env_example: envExample || '',
-        railway_url: railwayUrl,
-        railway_project_id: projectId,
-        status: 'deploying',
-      })
+      .insert({ ...baseRecord, api_key: apiKey, github_repo_url: repoUrl })
       .select()
       .single();
+
+    if (error?.code === 'PGRST204') {
+      // Columns don't exist yet — insert without them
+      ({ data, error } = await supabaseAdmin
+        .from('apis')
+        .insert(baseRecord)
+        .select()
+        .single());
+    }
 
     if (error) throw error;
 
@@ -212,6 +288,7 @@ export async function POST(req: NextRequest) {
       projectId,
       serviceId,
       webhookUrl,
+      apiKey,
     });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Deployment failed';

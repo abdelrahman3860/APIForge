@@ -15,6 +15,8 @@ create table if not exists apis (
   env_example         text not null default '',
   railway_url         text,
   railway_project_id  text,
+  api_key             text,
+  github_repo_url     text,
   status              text not null default 'deploying'
                         check (status in ('deploying', 'live', 'failed')),
   free_calls_used     integer not null default 0,
@@ -59,3 +61,7 @@ create policy "service role full access" on free_tests for all using (true);
 
 create policy "public can read live apis" on apis
   for select using (status = 'live');
+
+-- ── Migration: add api_key and github_repo_url (run if upgrading existing schema) ──
+alter table apis add column if not exists api_key         text;
+alter table apis add column if not exists github_repo_url text;

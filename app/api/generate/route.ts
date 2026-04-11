@@ -50,15 +50,34 @@ railway init && railway up
 ===END_DEPLOY===
 
 Rules for the Express API:
-- API key auth middleware: check the X-API-Key header against process.env.API_KEY — reject with 401 if missing/wrong
+- ONLY ONE FILE: everything must be in server.js — never require('./anything') or split into multiple files. No separate modules, helpers, or middleware files.
+- API key auth: inline this exact middleware at the top of server.js (do not extract to a separate file):
+  app.use((req, res, next) => {
+    if (req.path === '/health') return next();
+    const key = req.headers['x-api-key'];
+    if (process.env.API_KEY && (!key || key !== process.env.API_KEY)) {
+      return res.status(401).json({ success: false, error: 'Invalid or missing API key' });
+    }
+    next();
+  });
 - CORS enabled for all origins (cors package)
 - All routes return JSON with { success, data } or { success: false, error, message }
 - Input validation with descriptive errors
 - 404 handler and global error handler at the bottom
 - Use the best available npm packages — never stub the real logic
-- If an external API key is required (e.g. YouTube Data API), add it to .env.example with clear instructions
+- Only use packages that DEFINITELY exist on npm and install without native build tools (no node-gyp, no C++ addons). Never hallucinate package names. For DNS checks use Node.js built-in 'dns' module. For email/URL/string validation use 'validator'. For HTTP requests use 'axios'. For parsing use 'cheerio'. Stick to packages you are 100% certain about (express, cors, axios, joi, lodash, uuid, moment, dayjs, validator, cheerio, nodemailer).
+- NEVER call process.exit() at startup or check for required env vars at startup — the server must always start successfully
+- NEVER initialize third-party API clients at module level — always initialize them inside request handlers (lazily), so a missing env var or constructor error never crashes the process at startup
+- NEVER use the openai package unless the user explicitly asks for AI/LLM/GPT functionality. For tasks like SEO, formatting, or data transformation, implement the logic directly without calling any AI API.
+- If you use the openai npm package, ALWAYS use the v4 API: const OpenAI = require('openai'); const client = new OpenAI({apiKey: process.env.OPENAI_API_KEY}); — NEVER use the deprecated v3 pattern: const { Configuration, OpenAIApi } = require('openai')
+- If an external API key is required (e.g. YouTube Data API), add it to .env.example and handle its absence gracefully at request time (return a 503 with a clear message), not at startup
 - Include helpful comments explaining each endpoint
-- Listen on process.env.PORT || 3000`;
+- REQUIRED: include this exact health route BEFORE any other routes (it must bypass API key auth):
+  app.get('/health', (req, res) => res.json({ success: true, status: 'ok' }));
+- REQUIRED: end the file with exactly this pattern (Railway requires the PORT env var):
+  const PORT = process.env.PORT || 3000;
+  app.listen(PORT, () => console.log(\`Server running on port \${PORT}\`));
+- ENV_EXAMPLE must contain ONLY placeholder values like API_KEY=your_api_key_here — never real secrets`;
 
 export async function POST(req: NextRequest) {
   const { request } = await req.json();
@@ -77,7 +96,7 @@ export async function POST(req: NextRequest) {
     async start(controller) {
       try {
         const stream = await groq.chat.completions.create({
-          model: 'llama-3.3-70b-versatile',
+          model: 'moonshotai/kimi-k2-instruct',
           max_tokens: 8000,
           stream: true,
           messages: [
