@@ -64,6 +64,10 @@ function withStartScript(raw: string): string {
     if (!pkg.scripts?.start) {
       pkg.scripts = { ...pkg.scripts, start: 'node server.js' };
     }
+    // Ensure Node 18+ so packages like undici / axios v1 don't crash on Railway
+    if (!pkg.engines) {
+      pkg.engines = { node: '>=18' };
+    }
     return JSON.stringify(pkg, null, 2);
   } catch {
     return raw;

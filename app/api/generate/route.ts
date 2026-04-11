@@ -77,6 +77,7 @@ Rules for the Express API:
 - REQUIRED: end the file with exactly this pattern (Railway requires the PORT env var):
   const PORT = process.env.PORT || 3000;
   app.listen(PORT, () => console.log(\`Server running on port \${PORT}\`));
+- REQUIRED: package.json MUST include "engines": { "node": ">=18" } so Railway uses Node 18 — without this the deploy will crash
 - ENV_EXAMPLE must contain ONLY placeholder values like API_KEY=your_api_key_here — never real secrets`;
 
 export async function POST(req: NextRequest) {
